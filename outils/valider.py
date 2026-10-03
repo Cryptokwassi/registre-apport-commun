@@ -340,9 +340,14 @@ def controler_immutabilite(chemin):
 # --------------------------------------------------------------------------
 
 def lister_entrees(depart=None):
+    """Lister les entrées du registre. Le jeu d'essai du contrôleur (outils/essai)
+    est exclu : il ne fait pas partie du registre."""
     base = os.path.join(RACINE, "registre") if depart is None else depart
+    essai = os.path.abspath(os.path.join(RACINE, "outils", "essai"))
     trouvees = []
     for dossier, _, fichiers in os.walk(base):
+        if os.path.abspath(dossier).startswith(essai):
+            continue
         for f in sorted(fichiers):
             if f.startswith("APP-") and f.endswith(".md"):
                 trouvees.append(os.path.join(dossier, f))
@@ -398,7 +403,7 @@ resume: "Guide de lecture des regles de validation"
 preuves:
   - url: https://exemple.org/guide-validation
     sha256: 4f2ac9e1b7d8035612aa47cf90e12b3d4c5e6f708192a3b4c5d6e7f8091a2b3c
-parrains: [kora, nadi]
+parrains: [mila, oren]
 validateurs:
   - pseudo: kora
     role: conseil
@@ -442,10 +447,12 @@ CAS_A_TESTER = [
 
 
 def auto_test():
-    print("Auto-test du validateur (jeu d'essai temporaire, hors registre)\n")
+    print("Auto-test du validateur (jeu d'essai sous outils/essai, hors registre)\n")
     echecs = 0
 
-    dossier = tempfile.mkdtemp(prefix="regtest-")
+    dossier = os.path.join(RACINE, "outils", "essai", "registre", "2026", "10")
+    shutil.rmtree(os.path.join(RACINE, "outils", "essai"), ignore_errors=True)
+    os.makedirs(dossier, exist_ok=True)
     try:
         # 1. L'entree de reference doit passer
         chemin = os.path.join(dossier, "APP-202610-001.md")
@@ -463,7 +470,6 @@ def auto_test():
         # 2. Chaque cas de degradation doit declencher le controle attendu
         for nom, avant, apres, controle in CAS_A_TESTER:
             contenu = ENTREE_VALIDE.replace(avant, apres)
-            chemin = os.path.join(dossier, "APP-202610-001.md")
             with open(chemin, "w", encoding="utf-8") as f:
                 f.write(contenu)
             erreurs = controler_fichier(chemin, [])

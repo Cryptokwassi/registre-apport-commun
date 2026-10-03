@@ -1,0 +1,13 @@
+# Fins de ligne normalisees en LF, pour TOUS les fichiers du registre.
+#
+# Raison : la verification d'un recu repose sur l'empreinte du contenu du
+# fichier (git hash-object). Si Git reecrit les fins de ligne (conversion
+# CRLF <-> LF selon la plateforme), l'empreinte change d'une machine a
+# l'autre et le recu devient invérifiable. On fige donc LF partout.
+* text=auto eol=lf
+
+# Les fichiers binaires ne sont pas concernes.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.zip binary

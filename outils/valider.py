@@ -28,6 +28,10 @@ import tempfile
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Prefixe des identifiants. Parametre de projet : si le nom du projet change, ce
+# prefixe change pour les entrees futures, jamais pour les identifiants passes.
+ID_PREFIXE = "APP"
+
 COEFF_QUALITE = (0.5, 1.5)
 COEFF_RARETE = (0.8, 1.5)
 COEFF_PLAFOND = {1.0, 0.5}
@@ -131,10 +135,85 @@ def nombre(valeur):
 
 
 # --------------------------------------------------------------------------
+# Utilitaires de comparaison d'entrees
+# --------------------------------------------------------------------------
+
+def extraire_entete(texte):
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", texte, re.S)
+    return m.group(1) if m else ""
+
+
+def champs_premier_niveau(texte):
+    """Retourne {champ: valeur_normalisee} pour les champs de premier niveau.
+    Les listes sont normalisees (une seule ligne, valeurs triees) pour que la
+    comparaison ne depende pas de l'ordre ni de l'indentation."""
+    resultat = {}
+    for brut in extraire_entete(texte).splitlines():
+        if not brut.strip() or len(brut) - len(brut.lstrip(" ")) != 0 or ":" not in brut:
+            continue
+        cle, _, valeur = brut.partition(":")
+        cle = cle.strip()
+        valeur = valeur.strip()
+        if valeur == "":
+            valeur = "__liste__"
+        resultat[cle] = re.sub(r"\s+", " ", valeur)
+    return resultat
+
+
+def extraire_amendements(texte):
+    """Retourne la liste des amendements. Deux formes sont acceptees :
+    - forme a plat, recommandee : `- champ=x | avant=y | apres=z | motif=...`
+    - forme detaillee : `- champ: x` suivi de lignes `  avant: y`, etc.
+    """
+    lignes = extraire_entete(texte).splitlines()
+    amendements = []
+    courant = None
+    dans_bloc = False
+    for brut in lignes:
+        if not brut.strip():
+            continue
+        indent = len(brut) - len(brut.lstrip(" "))
+        contenu = brut.strip()
+        if indent == 0:
+            if contenu.startswith("amendements:"):
+                dans_bloc = True
+                courant = None
+                continue
+            dans_bloc = False
+            courant = None
+            continue
+        if not dans_bloc:
+            continue
+        if contenu.startswith("- "):
+            corps = contenu[2:].strip()
+            if "=" in corps and "|" in corps:
+                if courant:
+                    amendements.append(courant)
+                courant = corps          # forme a plat : tout sur une ligne
+            else:
+                if courant:
+                    amendements.append(courant)
+                courant = corps          # forme detaillee : suite sur les lignes suivantes
+        elif courant is not None:
+            courant += " " + contenu
+    if courant:
+        amendements.append(courant)
+    return amendements
+
+
+def extraire_parametre(ligne_amendement, nom):
+    for morceau in ligne_amendement.split("|"):
+        cle, _, valeur = morceau.partition("=")
+        if cle.strip() == nom:
+            return valeur.strip()
+    return ""
+
+
+# --------------------------------------------------------------------------
 # Contrôles
 # --------------------------------------------------------------------------
 
-def controler(chemin, donnees, tous_les_ids):
+def controler(chemin, donnees, tous_les_ids, prefixe=ID_PREFIXE):
     erreurs = []
 
     def err(num, message):
@@ -245,6 +324,8 @@ def controler(chemin, donnees, tous_les_ids):
     m = RE_ID.match(ident)
     if not m:
         err(7, f"identifiant mal forme : {ident} (attendu PREFIXE-AAAAMM-NNN)")
+    elif m.group(1) != prefixe:
+        err(7, f"prefixe d'identifiant inattendu : {m.group(1)} (attendu : {prefixe})")
     elif ident in tous_les_ids:
         err(7, f"identifiant deja present dans le registre : {ident}")
 
@@ -301,7 +382,12 @@ def controler(chemin, donnees, tous_les_ids):
 
 
 def controler_immutabilite(chemin):
-    """Controle 11 — une entree deja validee ne peut evoluer que par 'amendements'."""
+    """Controle 11 — une entree deja validee ne peut evoluer que par 'amendements'.
+
+    Methode : comparer la premiere version commitee de ce fichier a la version de
+    travail. Tout champ de premier niveau qui a change doit etre declare dans un
+    amendement. Un champ corrige sans amendement est un echec.
+    """
     try:
         rel = os.path.relpath(chemin, RACINE).replace(os.sep, "/")
         commits = subprocess.run(
@@ -311,22 +397,33 @@ def controler_immutabilite(chemin):
         if commits.returncode != 0:
             return []
         lignes = [l for l in commits.stdout.splitlines() if l.strip()]
-        if len(lignes) <= 1:
-            return []  # cree une seule fois : rien a comparer
+        if not lignes:
+            return []
         premier = lignes[-1]
-        diff = subprocess.run(
-            ["git", "diff", f"{premier}..HEAD", "--", rel],
+
+        avant = subprocess.run(
+            ["git", "show", f"{premier}:{rel}"],
             cwd=RACINE, capture_output=True, text=True, timeout=20,
         )
-        if diff.returncode != 0 or not diff.stdout.strip():
+        if avant.returncode != 0:
             return []
-        champs_touches = set()
-        for ligne in diff.stdout.splitlines():
-            if ligne.startswith(("+", "-")) and not ligne.startswith(("+++", "---")):
-                contenu = ligne[1:].strip()
-                if ":" in contenu:
-                    champs_touches.add(contenu.split(":", 1)[0].strip())
-        hors_amendements = {c for c in champs_touches if c != "amendements"}
+        with open(chemin, "r", encoding="utf-8") as f:
+            apres = f.read()
+
+        champs_avant = champs_premier_niveau(avant.stdout)
+        champs_apres = champs_premier_niveau(apres)
+        modifies = {
+            c for c in set(champs_avant) | set(champs_apres)
+            if champs_avant.get(c) != champs_apres.get(c)
+        }
+
+        declarees = {
+            extraire_parametre(a, "champ")
+            for a in extraire_amendements(apres)
+        }
+        declarees.discard("")
+
+        hors_amendements = modifies - declarees - {"amendements"}
         if hors_amendements:
             return [f"[controle 11] entree modifiee hors 'amendements' : "
                     f"{', '.join(sorted(hors_amendements))}"]
@@ -354,27 +451,33 @@ def lister_entrees(depart=None):
     return sorted(trouvees)
 
 
-def controler_fichier(chemin, tous_les_ids):
+def controler_fichier(chemin, tous_les_ids, prefixe=ID_PREFIXE):
     try:
         donnees = lire_entree(chemin)
     except Exception as exc:  # noqa: BLE001
         return [f"[lecture] {exc}"]
-    return controler(chemin, donnees, tous_les_ids)
+    return controler(chemin, donnees, tous_les_ids, prefixe)
 
 
 def executer(chemins):
-    entrees = lister_entrees()
-    ids = []
-    for c in entrees:
+    toutes = lister_entrees()
+    # Identifiants de TOUTES les autres entrees, pour detecter un doublon.
+    # L'entree controlee est exclue de cette liste : sinon elle serait
+    # consideree comme son propre doublon.
+    autres_ids = []
+    for c in toutes:
+        if any(os.path.abspath(c) == os.path.abspath(x) for x in chemins):
+            continue
         try:
             ident = lire_entree(c).get("id")
             if ident:
-                ids.append(str(ident).strip())
+                autres_ids.append(str(ident).strip())
         except Exception:  # noqa: BLE001
             pass
+
     total_erreurs = 0
     for chemin in chemins:
-        erreurs = controler_fichier(chemin, ids)
+        erreurs = controler_fichier(chemin, autres_ids)
         rel = os.path.relpath(chemin, RACINE)
         if erreurs:
             total_erreurs += len(erreurs)
@@ -438,8 +541,8 @@ CAS_A_TESTER = [
     ("coefficient qualite hors bornes", "coefficient_qualite: 1.2", "coefficient_qualite: 2.0", 3),
     ("validateur unique", "  - pseudo: nadi\n    role: conseil\n    note_qualite: 1.1\n    justifie_le: 2026-10-07\n", "", 4),
     ("validateur = contributeur", "pseudo: kora", "pseudo: tisseuse", 5),
-    ("parrain = validateur", "parrains: [kora, nadi]", "parrains: [kora, autre]", 5),
-    ("aucun parrain", "parrains: [kora, nadi]", "parrains: []", 6),
+    ("parrain = validateur", "parrains: [mila, oren]", "parrains: [mila, kora]", 5),
+    ("aucun parrain", "parrains: [mila, oren]", "parrains: []", 6),
     ("identifiant mal forme", "id: APP-202610-001", "id: APP-101-1", 7),
     ("preuve sans empreinte", "    sha256: 4f2ac9e1b7d8035612aa47cf90e12b3d4c5e6f708192a3b4c5d6e7f8091a2b3c\n", "", 8),
     ("bareme inexistant", "bareme_version: 2026-10", "bareme_version: 1999-01", 11),

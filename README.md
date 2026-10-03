@@ -97,11 +97,49 @@ Ces documents vivent dans le dépôt documentaire du projet (`jeton-communautair
 | Schéma des données | v1 — figé pour les entrées à venir |
 | Barème en vigueur | `2026-10` |
 | Entrées publiées | **0** — le registre n'a pas encore reçu sa première contribution |
-| Contrôleur automatique | `outils/valider.py` — opérationnel, auto-testé |
+| Contrôleur automatique | `outils/valider.py` — opérationnel, auto-testé (11 cas) |
+| Archive complète (bundle) | **Créée et vérifiée** — `registre-apport-commun.bundle` |
+| Dépôt distant (GitHub) | **Non configuré** — clé SSH à enregistrer sur le compte |
 | Ancrage externe | **Non mis en place** — à décider avant la 10ᵉ entrée |
 | Second clone de réplication | **Non désigné** — à désigner avant la 10ᵉ entrée |
 
 Les deux dernières lignes sont les seules protections contre la réécriture de l'historique. Tant qu'elles ne sont pas en place, l'immuabilité du registre est une intention, pas une propriété.
+
+## Sauvegarde et restauration
+
+### Le bundle — archive complète, vérifiable
+
+`registre-apport-commun.bundle` est un **fichier unique contenant l'intégralité du dépôt** : tous les commits, tous les fichiers, toutes les branches. C'est la sauvegarde à copier hors de la machine.
+
+```bash
+# Vérifier que l'archive est complète et intacte
+git bundle verify registre-apport-commun.bundle
+
+# Restaurer le registre à partir de l'archive, sur n'importe quelle machine
+git clone registre-apport-commun.bundle registre-restaure
+```
+
+**À régénérer après chaque nouvelle entrée publiée** :
+
+```bash
+git bundle create registre-apport-commun.bundle --all
+```
+
+L'archive n'est jamais versionnée dans le dépôt (elle est dans `.gitignore`) : c'est un artefact dérivé, pas une donnée du registre.
+
+### Pourquoi le bundle plutôt qu'un simple clone
+
+Un clone suffit à répliquer, mais il transporte une arborescence de travail et des fichiers internes. Le bundle est **un seul fichier** : plus simple à copier sur un disque, à envoyer, à archiver, et **Git sait le vérifier** — `git bundle verify` répond « complete history » ou refuse le fichier. Une sauvegarde que l'outil lui-même valide vaut mieux qu'une copie dont on espère qu'elle est complète.
+
+### Le test à faire une fois par trimestre
+
+1. Créer un dossier vide ailleurs sur la machine.
+2. Restaurer depuis le bundle : `git clone <bundle> registre-test`
+3. Lancer le contrôleur sur la copie restaurée : `python outils/valider.py`
+4. Vérifier que toutes les entrées passent.
+5. Supprimer le dossier de test.
+
+**Une sauvegarde jamais restaurée n'est pas une sauvegarde.** Ce test a déjà été effectué une fois : l'arborescence complète a été récupérée depuis le bundle et le contrôleur a validé l'entrée restaurée.
 
 ## Licence et réutilisation
 

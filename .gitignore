@@ -1,0 +1,10 @@
+# Artefacts derives : ne pas versionner.
+# Le bundle est une archive complete du depot, regeneree periodiquement.
+*.bundle
+
+# Le fichier known_hosts est propre a la machine.
+.known_hosts
+
+# Divers
+__pycache__/
+*.pyc
